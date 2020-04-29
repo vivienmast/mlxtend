@@ -14,7 +14,7 @@ import pandas as pd
 
 
 def association_rules(df, metric="confidence",
-                      min_threshold=0.8, support_only=False):
+                      min_threshold=0.8, support_only=False, custom_metrics={}):
     """Generates a DataFrame of association rules including the
     metrics 'score', 'confidence', and 'lift'
 
@@ -83,36 +83,34 @@ def association_rules(df, metric="confidence",
                          columns 'support' and 'itemsets'")
 
     def conviction_helper(sAC, sA, sC):
-        confidence = sAC/sA
-        conviction = np.empty(confidence.shape, dtype=float)
-        if not len(conviction.shape):
-            conviction = conviction[np.newaxis]
-            confidence = confidence[np.newaxis]
-            sAC = sAC[np.newaxis]
-            sA = sA[np.newaxis]
-            sC = sC[np.newaxis]
-        conviction[:] = np.inf
-        conviction[confidence < 1.] = ((1. - sC[confidence < 1.]) /
-                                       (1. - confidence[confidence < 1.]))
-
-        return conviction
+        confidence = sAC / sA
+        if confidence < 1.:
+            return (1. - sC) / (1. - confidence)
+        else:
+            return np.inf
 
     # metrics for association rules
     metric_dict = {
-        "antecedent support": lambda _, sA, __: sA,
-        "consequent support": lambda _, __, sC: sC,
-        "support": lambda sAC, _, __: sAC,
-        "confidence": lambda sAC, sA, _: sAC/sA,
-        "lift": lambda sAC, sA, sC: metric_dict["confidence"](sAC, sA, sC)/sC,
-        "leverage": lambda sAC, sA, sC: metric_dict["support"](
-             sAC, sA, sC) - sA*sC,
-        "conviction": lambda sAC, sA, sC: conviction_helper(sAC, sA, sC)
-        }
+        "antecedent support": lambda _, antecedent, __, dict: dict[antecedent]["support"],
+        "consequent support": lambda _, __, consequent, dict: dict[consequent]["support"],
+        "support": lambda k, _, __, dict: dict[k]["support"],
+        "confidence": lambda k, antecedent, _, dict: dict[k]["support"] / dict[antecedent]["support"],
+        "lift": lambda k, antecedent, consequent, dict: metric_dict["confidence"](k, antecedent, consequent, dict) /
+                                                  dict[consequent]["support"],
+        "leverage": lambda k, antecedent, consequent, dict: metric_dict["support"](
+            k, antecedent, consequent, dict) - dict[antecedent]["support"] * dict[consequent]["support"],
+        "conviction": lambda k, antecedent, consequent, dict: conviction_helper(dict[k]["support"],
+                                                                          dict[antecedent]["support"],
+                                                                          dict[consequent]["support"])
+    }
 
     columns_ordered = ["antecedent support", "consequent support",
                        "support",
                        "confidence", "lift",
                        "leverage", "conviction"]
+
+    columns_ordered = columns_ordered + sorted(set(custom_metrics.keys()).difference(metric_dict.keys()))
+    metric_dict.update(custom_metrics)
 
     # check for metric compliance
     if support_only:
@@ -124,20 +122,21 @@ def association_rules(df, metric="confidence",
 
     # get dict of {frequent itemset} -> support
     keys = df['itemsets'].values
-    values = df['support'].values
+    values = df.to_dict('records')
     frozenset_vect = np.vectorize(lambda x: frozenset(x))
     frequent_items_dict = dict(zip(frozenset_vect(keys), values))
 
     # prepare buckets to collect frequent rules
+    rule_ks = []
     rule_antecedents = []
     rule_consequents = []
     rule_supports = []
 
     # iterate over all frequent itemsets
     for k in frequent_items_dict.keys():
-        sAC = frequent_items_dict[k]
+        sAC = frequent_items_dict[k]["support"]
         # to find all possible combinations
-        for idx in range(len(k)-1, 0, -1):
+        for idx in range(len(k) - 1, 0, -1):
             # of antecedent and consequent
             for c in combinations(k, r=idx):
                 antecedent = frozenset(c)
@@ -151,8 +150,8 @@ def association_rules(df, metric="confidence",
 
                 else:
                     try:
-                        sA = frequent_items_dict[antecedent]
-                        sC = frequent_items_dict[consequent]
+                        sA = frequent_items_dict[antecedent]["support"]
+                        sC = frequent_items_dict[consequent]["support"]
                     except KeyError as e:
                         s = (str(e) + 'You are likely getting this error'
                                       ' because the DataFrame is missing '
@@ -163,8 +162,9 @@ def association_rules(df, metric="confidence",
                         raise KeyError(s)
                     # check for the threshold
 
-                score = metric_dict[metric](sAC, sA, sC)
+                score = metric_dict[metric](k, antecedent, consequent, frequent_items_dict)
                 if score >= min_threshold:
+                    rule_ks.append(k)
                     rule_antecedents.append(antecedent)
                     rule_consequents.append(consequent)
                     rule_supports.append([sAC, sA, sC])
@@ -178,8 +178,8 @@ def association_rules(df, metric="confidence",
         # generate metrics
         rule_supports = np.array(rule_supports).T.astype(float)
         df_res = pd.DataFrame(
-            data=list(zip(rule_antecedents, rule_consequents)),
-            columns=["antecedents", "consequents"])
+            data=list(zip(rule_ks, rule_antecedents, rule_consequents)),
+            columns=["ks", "antecedents", "consequents"])
 
         if support_only:
             sAC = rule_supports[0]
@@ -192,6 +192,6 @@ def association_rules(df, metric="confidence",
             sA = rule_supports[1]
             sC = rule_supports[2]
             for m in columns_ordered:
-                df_res[m] = metric_dict[m](sAC, sA, sC)
-
+                df_res[m] = [metric_dict[m](x[0], x[1], x[2], frequent_items_dict) for x in zip(rule_ks, rule_antecedents, rule_consequents)]
+        df_res.drop(columns=["ks"], inplace=True)
         return df_res

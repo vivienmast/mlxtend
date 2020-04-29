@@ -56,6 +56,45 @@ def test_default():
     assert res_df.equals(expect), res_df
 
 
+def test_custom_measure():
+    columns = columns_ordered + ["custom"]
+    df = df_freq_items.copy()
+    df["custom_col"] = 2 * [0.5] + 9 * [1.0]
+    res_df = association_rules(df, custom_metrics={
+        "leverage": lambda k, antecedent, consequent, dict: dict[antecedent]["support"] + dict[consequent]["support"] +
+                                                          dict[k]["custom_col"],
+        "custom": lambda k, antecedent, consequent, dict: dict[antecedent]["support"] + dict[consequent]["support"] +
+                                                          dict[k]["custom_col"]})
+    res_df['antecedents'] = res_df['antecedents'].apply(
+        lambda x: str(frozenset(x)))
+    res_df['consequents'] = res_df['consequents'].apply(
+        lambda x: str(frozenset(x)))
+    res_df.sort_values(columns, inplace=True)
+    res_df.reset_index(inplace=True, drop=True)
+
+    expect = pd.DataFrame([
+        [(8,), (5,), 0.6, 1.0, 0.6, 1.0, 1.0, 2.6, np.inf, 2.6],
+        [(6,), (5,), 0.6, 1.0, 0.6, 1.0, 1.0, 2.6, np.inf, 2.6],
+        [(8, 3), (5,), 0.6, 1.0, 0.6, 1.0, 1.0, 2.6, np.inf, 2.6],
+        [(8, 5), (3,), 0.6, 0.8, 0.6, 1.0, 1.25, 2.4, np.inf, 2.4],
+        [(8,), (3, 5), 0.6, 0.8, 0.6, 1.0, 1.25, 2.4, np.inf, 2.4],
+        [(3,), (5,), 0.8, 1.0, 0.8, 1.0, 1.0, 2.8, np.inf, 2.8],
+        [(5,), (3,), 1.0, 0.8, 0.8, 0.8, 1.0, 2.8, 1.0, 2.8],
+        [(10,), (5,), 0.6, 1.0, 0.6, 1.0, 1.0, 2.6, np.inf, 2.6],
+        [(8,), (3,), 0.6, 0.8, 0.6, 1.0, 1.25, 2.4, np.inf, 2.4]],
+        columns=columns
+    )
+
+    expect['antecedents'] = expect['antecedents'].apply(
+        lambda x: str(frozenset(x)))
+    expect['consequents'] = expect['consequents'].apply(
+        lambda x: str(frozenset(x)))
+    expect.sort_values(columns, inplace=True)
+    expect.reset_index(inplace=True, drop=True)
+
+    assert res_df.equals(expect), res_df
+
+
 def test_datatypes():
     res_df = association_rules(df_freq_items)
     for i in res_df['antecedents']:
@@ -68,7 +107,7 @@ def test_datatypes():
     # check if association_rule converts it internally
     # back to frozensets
     df_freq_items_copy = df_freq_items.copy()
-    df_freq_items_copy['itemsets'] = df_freq_items_copy['itemsets']\
+    df_freq_items_copy['itemsets'] = df_freq_items_copy['itemsets'] \
         .apply(lambda x: set(x))
 
     res_df = association_rules(df_freq_items)
@@ -173,7 +212,6 @@ def test_frozenset_selection():
 
 
 def test_override_metric_with_support():
-
     res_df = association_rules(df_freq_items_with_colnames,
                                min_threshold=0.8)
     # default metric is confidence
